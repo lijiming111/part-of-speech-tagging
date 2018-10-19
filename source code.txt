@@ -1,0 +1,204 @@
+import codecs
+import re
+import math
+
+# using HMM model to predicate a POS tags for each word
+tansitonmatrix={}
+emissionmatrix={}
+startmatrix={}
+
+worddic={}
+forwardtagdic={}
+tagslist=[]
+
+#input text,use 80% data for model training other 20% for testing
+f=codecs.open('data.txt','r',encoding='utf8')
+
+lines=0 
+
+alltrainwords=[] #training set
+alltestwords=[]#testing set
+
+while 1:	
+	line=""
+	line=f.readline()
+	if not line:
+		break
+	lines+=1
+	if lines <= 15900:
+		if line.split():
+			words=[]
+			words=line.split()
+			del words[0] #remove useless words
+			words.append('\r\n')
+			alltrainwords.extend(words)
+	else:
+		if line.split():
+			words=[]
+			words=line.split()
+			alltestwords.append(words)
+
+f.close
+
+#calculate word frequency, emission matrix,start matrix,transition matrix
+forwardtag=""#forward tag
+for word in alltrainwords:
+	if forwardtag=="":
+		words=[]
+		words=word.split('/')
+		forwardtag=words[1]
+		if (words[0],words[1]) in emissionmatrix.keys():
+			emissionmatrix[(words[0],words[1])]+=1
+		else: 
+			emissionmatrix[(words[0],words[1])]=1
+		if words[0] in worddic.keys():
+			worddic[words[0]]+=1
+		else:
+			worddic[words[0]]=1
+		if not words[1] in tagslist:
+			tagslist.append(words[1])
+		if words[1] in startmatrix.keys():
+			startmatrix[words[1]]+=1
+		else:
+			startmatrix[words[1]]=1
+	elif word=='\r\n':
+		forwardtag=""
+	else:
+		words=[]
+		words=word.split('/')
+		if (forwardtag,words[1]) in tansitonmatrix.keys():
+			tansitonmatrix[(forwardtag,words[1])]+=1
+		else:
+			tansitonmatrix[(forwardtag,words[1])]=1
+		if forwardtag in forwardtagdic.keys():
+			forwardtagdic[forwardtag]+=1
+		else:
+			forwardtagdic[forwardtag]=1
+		forwardtag=words[1]#save the forward tag
+		if (words[0],words[1]) in emissionmatrix.keys():
+			emissionmatrix[(words[0],words[1])]+=1
+		else: 
+			emissionmatrix[(words[0],words[1])]=1
+		if words[0] in worddic.keys():
+			worddic[words[0]]+=1
+		else:
+			worddic[words[0]]=1
+		if not words[1] in tagslist:
+			tagslist.append(words[1])
+
+
+for word,item in emissionmatrix:
+	emissionmatrix[word,item]/=worddic[word]
+print("发射概率矩阵统计完毕")
+
+#add-delta smoothing
+delta=0.00001
+v=len(forwardtagdic)
+allstartword=0
+for word in startmatrix:
+	allstartword+=startmatrix[word]
+
+for tag1 in forwardtagdic:
+	if tag1 in startmatrix.keys():
+		startmatrix[tag1]=(startmatrix[tag1]+delta)/(allstartword+v*delta)
+	else:
+		startmatrix[tag1]=delta/(allstartword+v*delta)
+
+for tag1 in forwardtagdic:
+	for tag2 in forwardtagdic:
+		if (tag1,tag2) in tansitonmatrix.keys():
+			tansitonmatrix[tag1,tag2]=(tansitonmatrix[tag1,tag2]+delta)/(forwardtagdic[tag1]+v*delta)
+		else:
+			tansitonmatrix[tag1,tag2]=delta/(forwardtagdic[tag1]+v*delta)
+print("转移概率矩阵平滑完毕")
+
+#part of speech tagging
+rightnumber=0
+testnumber=0
+currentlines=1
+for vect in alltestwords:
+	firstflag=True
+	wordslist=[]
+	righttag=[]#save correct tag
+	for word in vect:
+		if firstflag:
+			firstflag=False
+		else:
+			words=[]
+			words=word.split('/')
+			righttag.append(words[1])
+			testnumber+=1
+			wordslist.append(words[0])	
+			
+	#viterbi
+	vtable=[[[0 for i in range(2)] for i in range(len(tagslist)+1)] for i in range(len(wordslist)) ]
+	firstwordflag=True
+	for wordin in range(len(wordslist)):
+		if firstwordflag:#initialize
+			firstwordflag=False
+			for j in range(len(tagslist)):
+				vtable[0][j][1]=0
+				if (wordslist[wordin],tagslist[j]) in emissionmatrix.keys(): 
+					vtable[0][j][0]=startmatrix[tagslist[j]]*emissionmatrix[wordslist[wordin],tagslist[j]]*10
+				else:#the word not in emission matrix
+					vtable[0][j][0]=startmatrix[tagslist[j]]*0.00001
+		else:
+			if wordslist[wordin] in worddic: 
+				for state in range(len(tagslist)):
+					wordindex=wordin
+					tempmax=0
+					maxtagindex=0
+					for j in range(len(tagslist)):
+						t=vtable[wordindex-1][j][0]*tansitonmatrix[tagslist[j],tagslist[state]]*10
+						if t> tempmax:
+							tempmax=t
+							maxtagindex=j
+					if (wordslist[wordin],tagslist[state]) in emissionmatrix.keys(): 
+						vtable[wordindex][state][0]=tempmax*emissionmatrix[wordslist[wordin],tagslist[state]]*10
+						vtable[wordindex][state][1]=maxtagindex
+					else:
+						vtable[wordindex][state][0]=tempmax*0.00001*10
+						vtable[wordindex][state][1]=maxtagindex
+			else:		
+				for i in range(len(tagslist)):
+					wordindex=wordin
+					tempmax=0
+					maxtagindex=0
+					for j in range(len(tagslist)):
+						t=vtable[wordindex-1][j][0]*tansitonmatrix[tagslist[j],tagslist[i]]
+						if t> tempmax:
+							tempmax=t
+							maxtagindex=j
+					vtable[wordindex][i][0]=tempmax*0.00001*10
+					vtable[wordindex][i][1]=maxtagindex
+	finalmax=0
+	finaltag=0
+	for j in range(len(tagslist)):
+		t=vtable[len(wordslist)-1][j][0]
+		if t>finalmax:
+			finalmax=t
+			finaltag=j
+	vtable[len(wordslist)-1][len(tagslist)][0]=finalmax
+	vtable[len(wordslist)-1][len(tagslist)][1]=finaltag
+	#find viterbi path
+	currenttags=[]
+	T=len(wordslist)-1
+	currenttags.insert(0,tagslist[finaltag])
+	nextstate=vtable[T][finaltag][1]
+	T=T-1
+	while(T>=0):
+		currenttags.insert(0,tagslist[nextstate])
+		nextstate=vtable[T][nextstate][1]
+		T=T-1
+	#count the number of correct tags
+	for j in range(len(righttag)):
+		if righttag[j]==currenttags[j]:
+			rightnumber+=1
+	
+	del wordslist
+	del vtable
+
+#print precision
+precision=rightnumber/testnumber 
+print('Precision:','%.2f%%'%(precision*100))
+input()
